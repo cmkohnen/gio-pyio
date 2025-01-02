@@ -6,9 +6,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gio-pyio"
-version = "0.0.5"
+version = "0.0.6"
 authors = [
-  { name="Christoph Matthias Kohnen", email="christoph.kohnen@disroot.org" },
+  { name="Christoph Matthias Kohnen", email="mail@cmkohnen.de" },
 ]
 description = "Python like IO for gio"
 readme = "README.md"
