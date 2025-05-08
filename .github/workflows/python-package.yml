@@ -31,7 +31,8 @@ jobs:
             libffi-dev \
             libgirepository1.0-dev \
             libglib2.0-dev \
-            libcairo-gobject2
+            libcairo-gobject2 \
+            libcairo2-dev
         python -m pip install --upgrade pip
         python -m pip install flake8 pytest twine build
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
