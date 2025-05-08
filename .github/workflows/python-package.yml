@@ -30,7 +30,8 @@ jobs:
             gir1.2-glib-2.0 \
             libffi-dev \
             libgirepository1.0-dev \
-            libglib2.0-dev
+            libglib2.0-dev \
+            cairo
         python -m pip install --upgrade pip
         python -m pip install flake8 pytest twine build
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
