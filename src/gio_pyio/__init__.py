@@ -8,7 +8,7 @@ from gi.repository import GLib, Gio
 class StreamWrapper(io.IOBase):
     """Wrap a stream as a `file object`_.
 
-    See :func:`Gio.open_file_like` for a convenience method to open a file as a
+    See :func:`open` for a convenience method to open a file as a
     `file object`_. Note, that this does not implement buffering, seeking, etc.
     and relies on the capabilities of *stream*.
 

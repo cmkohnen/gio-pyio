@@ -6,7 +6,7 @@ gio-pyio Documentation
 
 ====== =====================================
 PyPI   https://pypi.python.org/pypi/gio-pyio
-GitHub https://github.com/cmkohnen/gio_pyio
+GitHub https://github.com/cmkohnen/gio-pyio
 Docs   https://gio-pyio.readthedocs.io/
 ====== =====================================
 

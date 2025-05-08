@@ -10,7 +10,7 @@ version = "0.0.6"
 authors = [
   { name="Christoph Matthias Kohnen", email="mail@cmkohnen.de" },
 ]
-description = "Python like IO for gio"
+description = "Python like IO for Gio"
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [
@@ -23,6 +23,6 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/cmkohnen/gio_pyio"
-Issues = "https://github.com/cmkohnen/gio_pyio/issues"
+Repository = "https://github.com/cmkohnen/gio-pyio"
+Issues = "https://github.com/cmkohnen/gio-pyio/issues"
 Documentation = "https://gio-pyio.readthedocs.io"
