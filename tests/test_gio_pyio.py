@@ -19,7 +19,7 @@ from gi.repository import GLib, Gio
 import gio_pyio
 
 
-class GioFileLikeTests(unittest.TestCase):
+class GioPyIO(unittest.TestCase):
 
     def setUp(self):
         self.file, stream = Gio.File.new_tmp('TestGFile.XXXXXX')
@@ -31,6 +31,11 @@ class GioFileLikeTests(unittest.TestCase):
             self.f.close()
         with contextlib.suppress(GLib.Error):
             self.file.delete(None)
+
+    def testNative(self):
+        self.f.close()
+        self.f = gio_pyio.open(self.file, 'wb', buffering=0, native=False)
+        self.assertTrue(isinstance(self.f, gio_pyio.StreamWrapper))
 
     def testWeakRefs(self):
         # verify weak references
@@ -59,6 +64,17 @@ class GioFileLikeTests(unittest.TestCase):
     def testAttributes(self):
         # verify expected attributes exist
         self.f.closed   # merely shouldn't blow up
+
+    def testReadAndWrite(self):
+        self.f.close()
+        self.f = gio_pyio.open(self.file, 'wb', buffering=0, native=False)
+        self.f.write(b'Hello World!')
+        self.f.flush()
+        self.f.close()
+        self.f = gio_pyio.open(self.file, 'rb', buffering=0, native=False)
+        self.assertEqual(self.f.read(0), b'')
+        self.assertEqual(self.f.read(5), b'Hello')
+        self.assertEqual(self.f.read(), b' World!')
 
     def testReadinto(self):
         # verify readinto
@@ -342,7 +358,7 @@ class GioFileLikeTests(unittest.TestCase):
         f = gio_pyio.open(file, 'rb', native=False)
         data = json.load(f)
         f.close()
-        assert data['glossary']['title'] == 'example glossary'
+        self.assertEqual(data['glossary']['title'], 'example glossary')
 
     def testGResource(self):
         parent = Path(__file__).parent
@@ -357,7 +373,14 @@ class GioFileLikeTests(unittest.TestCase):
         resource._register()
 
         file = Gio.File.new_for_uri('resource:///example/example_data.json')
-        f = gio_pyio.open(file, 'rb')
+        f = gio_pyio.open(file, 'rb', buffering=0)
+        self.assertTrue(isinstance(f, gio_pyio.StreamWrapper))
         data = json.load(f)
         f.close()
-        assert data['glossary']['title'] == 'example glossary'
+        self.assertEqual(data['glossary']['title'], 'example glossary')
+
+        f = gio_pyio.open(file, 'rb')
+
+    def testStreamWrapper(self):
+        bogus = 'Hello'
+        self.assertRaises(TypeError, gio_pyio.StreamWrapper, bogus)
