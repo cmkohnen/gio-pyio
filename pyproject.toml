@@ -1,9 +1,3 @@
-# pyproject.toml
-
-[build-system]
-requires      = ["setuptools>=61.0.0", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "gio-pyio"
 version = "0.0.6"
@@ -26,3 +20,7 @@ dependencies = [
 Repository = "https://github.com/cmkohnen/gio-pyio"
 Issues = "https://github.com/cmkohnen/gio-pyio/issues"
 Documentation = "https://gio-pyio.readthedocs.io"
+
+[build-system]
+build-backend = "mesonpy"
+requires = ["meson-python", "meson>=1.1.0", "ninja", "setuptools_scm"]
