@@ -1,7 +1,10 @@
 #define PY_SSIZE_T_CLEAN
-#include <Python.h>
+#include "gio_pyio.h"
 
 extern PyTypeObject StreamWrapperType;
+
+PyObject *UnsupportedOperation = NULL;
+PyObject *PyGObjectClass = NULL;
 
 
 static struct PyModuleDef _gio_pyio_module = {
@@ -24,10 +27,15 @@ PyInit__gio_pyio(void) {
     if (!io_module)
         return NULL;
 
+    UnsupportedOperation = PyObject_GetAttrString(io_module, "UnsupportedOperation");
     PyObject *io_base = PyObject_GetAttrString(io_module, "IOBase");
+
     Py_DECREF(io_module);
     if (!io_base)
         return NULL;
+    if (!UnsupportedOperation)
+        return NULL;
+    Py_INCREF(UnsupportedOperation);
 
     PyObject *bases = PyTuple_Pack(1, io_base);
     Py_DECREF(io_base);
@@ -35,6 +43,18 @@ PyInit__gio_pyio(void) {
         return NULL;
 
     StreamWrapperType.tp_bases = bases;
+
+    PyObject *gi_module = PyImport_ImportModule("gi.repository.GObject");
+    if (!gi_module) {
+        return NULL;
+    }
+
+    PyGObjectClass = PyObject_GetAttrString(gi_module, "GObject");
+    Py_DECREF(gi_module);
+    if (!PyGObjectClass) {
+        return NULL;
+    }
+    Py_INCREF(PyGObjectClass);
 
     m = PyModule_Create(&_gio_pyio_module);
     if (m == NULL)

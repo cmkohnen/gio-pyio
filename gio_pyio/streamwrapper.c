@@ -1,6 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #define DEFAULT_BUF_SIZE 4096
-#include <Python.h>
+#include "gio_pyio.h"
 #include <gio/gio.h>
 #include <gio/gfiledescriptorbased.h>
 #include <pygobject.h>
@@ -39,41 +39,21 @@ StreamWrapper_init(StreamWrapper *self, PyObject *args, PyObject *kwds)
     if (!PyArg_ParseTuple(args, "O", &py_stream))
         return -1;
 
-    // Import 'gi.repository.GObject' module to get the GObject base type
-    PyObject *gi_module = PyImport_ImportModule("gi.repository.GObject");
-    if (!gi_module) {
-        PyErr_SetString(PyExc_ImportError, "Failed to import gi.repository.GObject");
-        return -1;
-    }
-
-    PyObject *gobject_type = PyObject_GetAttrString(gi_module, "GObject");
-    Py_DECREF(gi_module);
-    if (!gobject_type) {
-        PyErr_SetString(PyExc_AttributeError, "Failed to get GObject from gi.repository");
-        return -1;
-    }
-
-    // Check if py_stream is instance of GObject
-    int is_instance = PyObject_IsInstance(py_stream, gobject_type);
-    Py_DECREF(gobject_type);
+    int is_instance = PyObject_IsInstance(py_stream, PyGObjectClass);
 
     if (is_instance < 0) {
         // Error during isinstance check
         return -1;
     }
     if (!is_instance) {
-        PyErr_SetString(PyExc_TypeError, "expected a GObject stream object");
-        return -1;
+        goto typeerr;
     }
 
-    // Now safe to cast
     PyGObject *pygobj = (PyGObject *)py_stream;
-
     if (!pygobj->obj) {
         PyErr_SetString(PyExc_ValueError, "Invalid GObject pointer");
         return -1;
     }
-
     GObject *gobj = pygobj->obj;
 
     // Determine stream type and take refs
@@ -99,27 +79,21 @@ StreamWrapper_init(StreamWrapper *self, PyObject *args, PyObject *kwds)
 
         self->ref = G_SEEKABLE(self->input);
     } else {
-        PyErr_SetString(PyExc_TypeError, "expected a GIO stream object");
-        return -1;
+        goto typeerr;
     }
 
     return 0;
+
+typeerr:
+    PyErr_SetString(PyExc_TypeError, "expected a GIO stream object");
+    return -1;
 }
 
 
 static PyObject *
 err_unsupported (char* method)
 {
-    PyObject *io_module = PyImport_ImportModule("io");
-    if (io_module == NULL)
-        return NULL;
-
-    PyObject *exc = PyObject_GetAttrString(io_module, "UnsupportedOperation");
-    Py_DECREF(io_module);
-    if (exc == NULL)
-        return NULL;
-
-    PyErr_SetString(exc, method);
+    PyErr_SetString(UnsupportedOperation, method);
     return NULL;
 }
 
@@ -152,7 +126,7 @@ PyDoc_STRVAR(StreamWrapper_get_closed_doc,
     "``True`` if the underlying stream is closed."
 );
 static PyObject *
-StreamWrapper_get_closed(StreamWrapper *self, PyObject *Py_UNUSED(ignored)))
+StreamWrapper_get_closed(StreamWrapper *self, void *closure)
 {
     if (is_closed(self))
         Py_RETURN_TRUE;
