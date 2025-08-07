@@ -35,7 +35,7 @@ jobs:
             libcairo-gobject2 \
             libcairo2-dev
         python -m pip install --upgrade pip
-        python -m pip install flake8 pytest twine build
+        python -m pip install flake8 pytest twine build meson-python ninja setuptools_scm
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
     - name: Lint with flake8
       run: |
