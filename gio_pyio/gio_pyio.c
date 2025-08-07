@@ -6,62 +6,67 @@ extern PyTypeObject StreamWrapperType;
 PyObject *UnsupportedOperation = NULL;
 PyObject *PyGObjectClass = NULL;
 
-
-static struct PyModuleDef _gio_pyio_module = {
-    PyModuleDef_HEAD_INIT,
-    "gio_pyio",
-    "Module wrapping GIO streams as Python file objects",
-    -1,
-    NULL, NULL, NULL, NULL, NULL
-};
-
+static struct PyModuleDef _gio_pyio_module
+    = { PyModuleDef_HEAD_INIT,
+        "gio_pyio",
+        "Module wrapping GIO streams as Python file objects",
+        -1,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL };
 
 PyMODINIT_FUNC
-PyInit__gio_pyio(void) {
-    PyObject *m;
+PyInit__gio_pyio (void)
+{
+  PyObject *m;
 
-    if (PyType_Ready(&StreamWrapperType) < 0)
-        return NULL;
+  if (PyType_Ready (&StreamWrapperType) < 0)
+    return NULL;
 
-    PyObject *io_module = PyImport_ImportModule("io");
-    if (!io_module)
-        return NULL;
+  PyObject *io_module = PyImport_ImportModule ("io");
+  if (!io_module)
+    return NULL;
 
-    UnsupportedOperation = PyObject_GetAttrString(io_module, "UnsupportedOperation");
-    PyObject *io_base = PyObject_GetAttrString(io_module, "IOBase");
+  UnsupportedOperation
+      = PyObject_GetAttrString (io_module, "UnsupportedOperation");
+  PyObject *io_base = PyObject_GetAttrString (io_module, "IOBase");
 
-    Py_DECREF(io_module);
-    if (!io_base)
-        return NULL;
-    if (!UnsupportedOperation)
-        return NULL;
-    Py_INCREF(UnsupportedOperation);
+  Py_DECREF (io_module);
+  if (!io_base)
+    return NULL;
+  if (!UnsupportedOperation)
+    return NULL;
+  Py_INCREF (UnsupportedOperation);
 
-    PyObject *bases = PyTuple_Pack(1, io_base);
-    Py_DECREF(io_base);
-    if (!bases)
-        return NULL;
+  PyObject *bases = PyTuple_Pack (1, io_base);
+  Py_DECREF (io_base);
+  if (!bases)
+    return NULL;
 
-    StreamWrapperType.tp_bases = bases;
+  StreamWrapperType.tp_bases = bases;
 
-    PyObject *gi_module = PyImport_ImportModule("gi.repository.GObject");
-    if (!gi_module) {
-        return NULL;
+  PyObject *gi_module = PyImport_ImportModule ("gi.repository.GObject");
+  if (!gi_module)
+    {
+      return NULL;
     }
 
-    PyGObjectClass = PyObject_GetAttrString(gi_module, "GObject");
-    Py_DECREF(gi_module);
-    if (!PyGObjectClass) {
-        return NULL;
+  PyGObjectClass = PyObject_GetAttrString (gi_module, "GObject");
+  Py_DECREF (gi_module);
+  if (!PyGObjectClass)
+    {
+      return NULL;
     }
-    Py_INCREF(PyGObjectClass);
+  Py_INCREF (PyGObjectClass);
 
-    m = PyModule_Create(&_gio_pyio_module);
-    if (m == NULL)
-        return NULL;
+  m = PyModule_Create (&_gio_pyio_module);
+  if (m == NULL)
+    return NULL;
 
-    Py_INCREF(&StreamWrapperType);
-    PyModule_AddObject(m, "StreamWrapper", (PyObject *)&StreamWrapperType);
+  Py_INCREF (&StreamWrapperType);
+  PyModule_AddObject (m, "StreamWrapper", (PyObject *)&StreamWrapperType);
 
-    return m;
+  return m;
 }
