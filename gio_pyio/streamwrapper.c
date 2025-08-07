@@ -1,4 +1,5 @@
 #define PY_SSIZE_T_CLEAN
+#define DEFAULT_BUF_SIZE 4096
 #include <Python.h>
 #include <gio/gio.h>
 #include <gio/gfiledescriptorbased.h>
@@ -12,6 +13,22 @@ typedef struct {
     GIOStream *io;
     GSeekable *ref;
 } StreamWrapper;
+
+
+PyDoc_STRVAR(StreamWrapper_doc,
+    "Wrap a stream as a `file object`_.\n"
+    "\n"
+    "See :func:`open` for a convenience method to open a file as a\n"
+    "`file object`_. Note, that this does not implement buffering, seeking, etc. \n"
+    "and relies on the capabilities of *stream*.\n"
+    "\n"
+    ":param stream stream:\n"
+    "   A stream to be wrapped.\n"
+    ":raises TypeError:\n"
+    "   Invalid argument.\n"
+    "\n"
+    ".. _file object: https://docs.python.org/3/glossary.html#term-file-object"
+);
 
 
 static int
@@ -90,6 +107,23 @@ StreamWrapper_init(StreamWrapper *self, PyObject *args, PyObject *kwds)
 }
 
 
+static PyObject *
+err_unsupported (char* method)
+{
+    PyObject *io_module = PyImport_ImportModule("io");
+    if (io_module == NULL)
+        return NULL;
+
+    PyObject *exc = PyObject_GetAttrString(io_module, "UnsupportedOperation");
+    Py_DECREF(io_module);
+    if (exc == NULL)
+        return NULL;
+
+    PyErr_SetString(exc, method);
+    return NULL;
+}
+
+
 static gboolean
 is_closed(StreamWrapper *self)
 {
@@ -114,8 +148,11 @@ err_closed(void)
 }
 
 
+PyDoc_STRVAR(StreamWrapper_get_closed_doc,
+    "``True`` if the underlying stream is closed."
+);
 static PyObject *
-StreamWrapper_get_closed(StreamWrapper *self, void *closure)
+StreamWrapper_get_closed(StreamWrapper *self, PyObject *Py_UNUSED(ignored)))
 {
     if (is_closed(self))
         Py_RETURN_TRUE;
@@ -124,27 +161,32 @@ StreamWrapper_get_closed(StreamWrapper *self, void *closure)
 }
 
 
+PyDoc_STRVAR(StreamWrapper_close_doc,
+    "Flush and close the underlying stream.\n"
+    "\n"
+    "This method has no effect if the underlying stream is already closed.\n"
+    "Once closed, any operation (e. g. reading or writing) will raise a \n"
+    "ValueError.\n"
+    "As a convenience, it is allowed to call this method more than once;\n"
+    "only the first call, however, will have an effect."
+);
 static PyObject *
-StreamWrapper_close(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
+StreamWrapper_close_impl(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
 {
     if (is_closed(self)) Py_RETURN_NONE;
 
     GError *error = NULL;
 
-    // If _io_stream exists, close it
-    if (self->io != NULL) {
-        if (!g_io_stream_is_closed(self->io)) {
-            if (!g_io_stream_close(self->io, NULL, &error)) {
-                PyErr_SetString(PyExc_IOError, error->message);
-                g_error_free(error);
-                return NULL;
-            }
+    if (self->io) {
+        if (!g_io_stream_close(self->io, NULL, &error)) {
+            PyErr_SetString(PyExc_IOError, error->message);
+            g_error_free(error);
+            return NULL;
         }
         Py_RETURN_NONE;
     }
 
-    // Close input stream if readable and not closed
-    if (self->input != NULL && !g_input_stream_is_closed(self->input)) {
+    if (self->input) {
         if (!g_input_stream_close(self->input, NULL, &error)) {
             PyErr_SetString(PyExc_IOError, error->message);
             g_error_free(error);
@@ -152,8 +194,7 @@ StreamWrapper_close(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
         }
     }
 
-    // Close output stream if writable and not closed
-    if (self->output != NULL && !g_output_stream_is_closed(self->output)) {
+    if (self->output) {
         if (!g_output_stream_close(self->output, NULL, &error)) {
             PyErr_SetString(PyExc_IOError, error->message);
             g_error_free(error);
@@ -180,8 +221,15 @@ err_not_readable(void)
 }
 
 
+PyDoc_STRVAR(StreamWrapper_readable_doc,
+    "Whether or not the stream is readable.\n"
+    "\n"
+    ":rtype bool:\n"
+    ":returns:\n"
+    "   Whether or not this wrapper can be read from."
+);
 static PyObject *
-StreamWrapper_readable(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
+StreamWrapper_readable_impl(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
 {
     if (is_readable(self)) {
         Py_RETURN_TRUE;
@@ -191,8 +239,25 @@ StreamWrapper_readable(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
 }
 
 
+PyDoc_STRVAR(StreamWrapper_read_doc,
+    "Read up to *size* bytes from the underlying stream and return them.\n"
+    "\n"
+    "As a convenience if *size* is unspecified or -1, all bytes until EOF\n"
+    "are returned. The result may be fewer bytes than requested, if EOF is\n"
+    "reached.\n"
+    "\n"
+    ":param int size:\n"
+    "   The amount of bytes to read from the underlying stream."
+    ":rtype: bytes\n"
+    ":returns:\n"
+    "   Bytes read from the underlying stream.\n"
+    ":raises ValueError:\n"
+    "   If the underlying stream is closed.\n"
+    ":raises io.UnsupportedOperationException:\n"
+    "   If the underlying stream is not readable."
+);
 static PyObject *
-StreamWrapper_read(StreamWrapper *self, PyObject *args, PyObject *kwds)
+StreamWrapper_read_impl(StreamWrapper *self, PyObject *args, PyObject *kwds)
 {
     static char *kwlist[] = {"size", NULL};
     Py_ssize_t size = -1;
@@ -201,9 +266,9 @@ StreamWrapper_read(StreamWrapper *self, PyObject *args, PyObject *kwds)
         return NULL;
     }
 
-    if (!is_readable (self)) return err_not_readable ();
-
     if (is_closed (self)) return err_closed ();
+
+    if (!is_readable (self)) return err_not_readable ();
 
     if (size == 0) {
         // Return empty bytes
@@ -211,21 +276,25 @@ StreamWrapper_read(StreamWrapper *self, PyObject *args, PyObject *kwds)
     }
 
     GError *error = NULL;
-    GBytes *gbytes = NULL;
-    GInputStream *input = self->input;
 
     if (size > 0) {
-        // Read up to size bytes
-        gbytes = g_input_stream_read_bytes(input, (gsize)size, NULL, &error);
-        if (gbytes == NULL) {
+        // Allocate buffer for fixed-size read
+        char *buffer = g_malloc(size);
+        if (buffer == NULL) {
+            PyErr_NoMemory();
+            return NULL;
+        }
+
+        gssize n;
+        if (!g_input_stream_read_all(self->input, buffer, (gsize)size, &n, NULL, &error)) {
+            g_free(buffer);
             PyErr_SetString(PyExc_IOError, error ? error->message : "Read error");
             g_clear_error(&error);
             return NULL;
         }
-        // Convert to Python bytes and free GBytes
-        PyObject *result = PyBytes_FromStringAndSize((const char *)g_bytes_get_data(gbytes, NULL),
-                                                     g_bytes_get_size(gbytes));
-        g_bytes_unref(gbytes);
+
+        PyObject *result = PyBytes_FromStringAndSize(buffer, n);
+        g_free(buffer);
         return result;
     } else {
         // Read until EOF
@@ -233,12 +302,19 @@ StreamWrapper_read(StreamWrapper *self, PyObject *args, PyObject *kwds)
         if (result == NULL)
             return NULL;
 
-        Py_ssize_t total_read = 0;
-        const Py_ssize_t chunk_size = 4096;
-        char buffer[chunk_size];
+        gssize bufsize;
 
-        while (1) {
-            gssize n = g_input_stream_read(input, buffer, chunk_size, NULL, &error);
+        if (G_IS_BUFFERED_INPUT_STREAM(self->input)) {
+            bufsize = g_buffered_input_stream_get_buffer_size(G_BUFFERED_INPUT_STREAM(self->input));
+        } else {
+            bufsize = DEFAULT_BUF_SIZE;
+        }
+
+        Py_ssize_t total_read = 0;
+        char buffer[bufsize];
+
+        while (TRUE) {
+            gssize n = g_input_stream_read(self->input, buffer, bufsize, NULL, &error);
             if (n < 0) {
                 Py_DECREF(result);
                 PyErr_SetString(PyExc_IOError, error ? error->message : "Read error");
@@ -261,19 +337,33 @@ StreamWrapper_read(StreamWrapper *self, PyObject *args, PyObject *kwds)
 }
 
 
+PyDoc_STRVAR(StreamWrapper_readinto_doc,
+    "Read bytes into a pre-allocated, writable `bytes-like object`_ *b*.\n"
+    "\n"
+    ":param bytes-like b:\n"
+    "   A pre-allocated object.\n"
+    ":rtype: int\n"
+    ":returns:\n"
+    "   Number of bytes written.\n"
+    ":raises ValueError:\n"
+    "   If the underlying stream is closed.\n"
+    ":raises io.UnsupportedOperationException:\n"
+    "   If the underlying stream is not readable.\n"
+    "\n"
+    ".. _bytes-like object: https://docs.python.org/3/glossary.html#term-bytes-like-object"
+);
 static PyObject *
-StreamWrapper_readinto(StreamWrapper *self, PyObject *args)
+StreamWrapper_readinto_impl(StreamWrapper *self, PyObject *args)
 {
     PyObject *buffer_obj;
 
     if (!PyArg_ParseTuple(args, "O", &buffer_obj))
         return NULL;
 
-    if (!is_readable (self)) return err_not_readable ();
-
     if (is_closed (self)) return err_closed ();
 
-    // Get writable buffer view
+    if (!is_readable (self)) return err_not_readable ();
+
     Py_buffer view;
     if (PyObject_GetBuffer(buffer_obj, &view, PyBUF_WRITABLE) == -1) {
         // Not writable buffer
@@ -281,9 +371,8 @@ StreamWrapper_readinto(StreamWrapper *self, PyObject *args)
     }
 
     GError *error = NULL;
-    gssize n_read = g_input_stream_read(self->input, (gchar *)view.buf, (gsize)view.len, NULL, &error);
-
-    if (n_read < 0) {
+    gssize n_read;
+    if (!g_input_stream_read_all(self->input, (void*)view.buf, (gsize)view.len, &n_read, NULL, &error)) {
         PyBuffer_Release(&view);
         PyErr_SetString(PyExc_IOError, error ? error->message : "Read error");
         g_clear_error(&error);
@@ -311,8 +400,15 @@ err_not_writable(void)
 }
 
 
+PyDoc_STRVAR(StreamWrapper_writable_doc,
+    "Wheter or not the stream can be written to.\n"
+    "\n"
+    ":rtype bool:\n"
+    ":returns:\n"
+    "   Whether or not this wrapper can be written to."
+);
 static PyObject *
-StreamWrapper_writable(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
+StreamWrapper_writable_impl(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
 {
     if (is_writable(self)) {
         Py_RETURN_TRUE;
@@ -322,21 +418,31 @@ StreamWrapper_writable(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
 }
 
 
+PyDoc_STRVAR(StreamWrapper_write_doc,
+    "Write *b* to the underlying stream.\n"
+    "\n"
+    ":param bytes-like b:\n"
+    "   Content to be written to the underlying stream.\n"
+    ":rtype: int\n"
+    ":returns:\n"
+    "   The number of bytes written to the underlying stream.\n"
+    ":raises ValueError:\n"
+    "   If the underlying stream is closed.\n"
+    ":raises io.UnsupportedOperationException:\n"
+    "   If the underlying stream can not be written to."
+);
 static PyObject *
-StreamWrapper_write(StreamWrapper *self, PyObject *args)
+StreamWrapper_write_impl(StreamWrapper *self, PyObject *args)
 {
     Py_buffer view;
-    gssize bytes_written;
-    GError *error = NULL;
 
-    if (!is_writable(self)) return err_not_writable ();
+    if (!PyArg_ParseTuple(args, "y*", &view)) {
+        return NULL;
+    }
 
     if (is_closed (self)) return err_closed ();
 
-    // Parse one argument: a bytes-like object
-    if (!PyArg_ParseTuple(args, "y*", &view)) {
-        return NULL;  // Not bytes-like, error set by PyArg_ParseTuple
-    }
+    if (!is_writable(self)) return err_not_writable ();
 
     if (view.len == 0) {
         // Nothing to write, release buffer and return 0
@@ -345,10 +451,12 @@ StreamWrapper_write(StreamWrapper *self, PyObject *args)
     }
 
     // Write all bytes from view.buf of length view.len
+    GError *error = NULL;
+    gssize bytes_written;
     gboolean success = g_output_stream_write_all(self->output,
                                                  view.buf,
                                                  view.len,
-                                                 (gsize *)&bytes_written,
+                                                 &bytes_written,
                                                  NULL,
                                                  &error);
 
@@ -364,23 +472,31 @@ StreamWrapper_write(StreamWrapper *self, PyObject *args)
 }
 
 
+PyDoc_STRVAR(StreamWrapper_flush_doc,
+    "Flush the write buffers of the underlying stream if applicable.\n"
+    "\n"
+    "This does nothing for read-only streams.\n"
+    "\n"
+    ":raises ValueError:\n"
+    "   If the underlying stream is closed.\n"
+);
 static PyObject *
-StreamWrapper_flush(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
+StreamWrapper_flush_impl(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
 {
-    if (self->output == NULL) {
-        // No output stream to flush — just return None
+    if (is_closed (self)) return err_closed ();
+
+    if (!is_writable) {
         Py_RETURN_NONE;
     }
 
-    if (is_closed (self)) return err_closed ();
-
     GError *error = NULL;
-    gboolean success = g_output_stream_flush(self->output, NULL, &error);
-
-    if (!success) {
-        PyErr_SetString(PyExc_IOError, error ? error->message : "Flush failed");
-        g_clear_error(&error);
-        return NULL;
+    if (!g_output_stream_flush(self->output, NULL, &error)) {
+        // Implementing flush is not required, causing error to not be set
+        if (error) {
+            PyErr_SetString(PyExc_IOError, error->message);
+            g_clear_error(&error);
+            return NULL;
+        }
     }
 
     Py_RETURN_NONE;
@@ -406,9 +522,22 @@ err_not_seekable(void)
 }
 
 
+PyDoc_STRVAR(StreamWrapper_seekable_doc,
+    "Whether or not the stream is seekable.\n"
+    "\n"
+    ":rtype: bool\n"
+    ":returns:\n"
+    "   Whether or not the underlying stream supports seeking.\n"
+    ":raises ValueError:\n"
+    "   If the underlying stream is closed.\n"
+    ":raises io.UnsupportedOperationException:\n"
+    "   If the underlying stream is not seekable."
+);
 static PyObject *
-StreamWrapper_seekable(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
+StreamWrapper_seekable_impl(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
 {
+    if (is_closed (self)) return err_closed ();
+
     if (is_seakable(self)) {
         Py_RETURN_TRUE;
     } else {
@@ -417,14 +546,57 @@ StreamWrapper_seekable(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
 }
 
 
+PyDoc_STRVAR(StreamWrapper_tell_doc,
+    "Tell the current stream position.\n"
+    "\n"
+    ":rtype: int\n"
+    ":returns:\n"
+    "   The position of the underlying stream.\n"
+    ":raises ValueError:\n"
+    "   If the underlying stream is closed.\n"
+    ":raises io.UnsupportedOperationException:\n"
+    "   If the underlying stream is not seekable."
+);
 static PyObject *
-StreamWrapper_seek(StreamWrapper *self, PyObject *args, PyObject *kwargs)
+StreamWrapper_tell_impl(StreamWrapper *self, PyObject Py_UNUSED(ignored))
+{
+    if (is_closed (self)) return err_closed ();
+
+    if (!is_seakable (self)) return err_not_seekable ();
+
+    goffset pos = g_seekable_tell(G_SEEKABLE(self->ref));
+
+    return PyLong_FromLongLong(pos);
+}
+
+
+
+PyDoc_STRVAR(StreamWrapper_seek_doc,
+    "Change the underlying stream position.\n"
+    "\n"
+    "*offset* is interpreted relative to the position indicated by *whence*.\n"
+    "\n"
+    ":param int offset:\n"
+    "   Where to change the stream position to, relative to *whence*"
+    ":param int whence:\n"
+    "   Reference for *offset*. Values are:\n"
+    "   * 0 -- start of stream (the default); offset should'nt be negative\n"
+    "   * 1 -- current stream position; offset may be negative\n"
+    "   * 2 -- end of stream; offset is usually negative\n"
+    ":rtype: int\n"
+    ":returns:\n"
+    "   The new absolute position of the underlying stream.\n"
+    ":raises ValueError:\n"
+    "   If the underlying stream is closed.\n"
+    ":raises io.UnsupportedOperationException:\n"
+    "   If the underlying stream is not seekable."
+);
+static PyObject *
+StreamWrapper_seek_impl(StreamWrapper *self, PyObject *args, PyObject *kwargs)
 {
     static char *kwlist[] = {"offset", "whence", NULL};
-    gint64 offset;
+    goffset offset;
     int whence = SEEK_SET;
-    GSeekType seek_type;
-    GError *error = NULL;
 
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "L|i", kwlist, &offset, &whence)) {
         return NULL;
@@ -434,6 +606,7 @@ StreamWrapper_seek(StreamWrapper *self, PyObject *args, PyObject *kwargs)
 
     if (!is_seakable (self)) return err_not_seekable ();
 
+    GSeekType seek_type;
     switch (whence) {
         case SEEK_SET:
             seek_type = G_SEEK_SET;
@@ -449,63 +622,107 @@ StreamWrapper_seek(StreamWrapper *self, PyObject *args, PyObject *kwargs)
             return NULL;
     }
 
-    if (!g_seekable_seek(G_SEEKABLE(self->ref), offset, seek_type, NULL, &error)) {
-        PyErr_SetString(PyExc_IOError, error->message);
-        g_error_free(error);
-        return NULL;
+    GError *error = NULL;
+
+    if (is_readable (self)) {
+        if (!g_seekable_seek(G_SEEKABLE(self->input), offset, seek_type, NULL, &error)) {
+            PyErr_SetString(PyExc_IOError, error->message);
+            g_error_free(error);
+            return NULL;
+        }
     }
 
-    gint64 pos = g_seekable_tell(G_SEEKABLE(self->ref));
-    if (pos < 0) {
-        PyErr_SetString(PyExc_IOError, "Failed to get stream position after seek");
-        return NULL;
+    if (is_writable (self)) {
+        if (!g_seekable_seek(G_SEEKABLE(self->output), offset, seek_type, NULL, &error)) {
+            PyErr_SetString(PyExc_IOError, error->message);
+            g_error_free(error);
+            return NULL;
+        }
     }
+
+    goffset pos = g_seekable_tell(G_SEEKABLE(self->ref));
 
     return PyLong_FromLongLong(pos);
 }
 
 
+PyDoc_STRVAR(StreamWrapper_truncate_doc,
+    "Resize the underlying stream to *size*.\n"
+    "\n"
+    ":param int size:\n"
+    "   The size, the stream should be set to. If ``None`` the current\n"
+    "   position is used.\n"
+    ":rtype: int\n"
+    ":returns:\n"
+    "   The new size of the underlying stream.\n"
+    ":raises ValueError:\n"
+    "   If the underlying stream is closed.\n"
+    ":raises io.UnsupportedOperationException:\n"
+    "   If the underlying stream is not seekable."
+);
 static PyObject *
-StreamWrapper_tell(StreamWrapper *self, PyObject Py_UNUSED(ignored))
+StreamWrapper_truncate_impl(StreamWrapper *self, PyObject *args)
 {
+    goffset size;
+
+    if (!PyArg_ParseTuple(args, "|L", &size)) {
+        return NULL;
+    }
+
     if (is_closed (self)) return err_closed ();
 
     if (!is_seakable (self)) return err_not_seekable ();
 
-    gint64 pos;
+    if (!g_seekable_can_truncate(G_SEEKABLE(self->ref))) {
+        return err_unsupported ("truncate");
+    }
 
-    // Get the current position
-    pos = g_seekable_tell(G_SEEKABLE(self->ref));
+    // If no size provided, use current position
+    if (PyTuple_Size(args) == 0) {
+        size = g_seekable_tell(G_SEEKABLE(self->ref));
+    }
 
-    if (pos < 0) {
-        PyErr_SetString(PyExc_IOError, "Failed to get stream position");
+    GError *error = NULL;
+    if (!g_seekable_truncate(G_SEEKABLE(self->output), size, NULL, &error)) {
+        PyErr_SetString(PyExc_IOError, "Failed to truncate");
+        g_clear_error(&error);
         return NULL;
     }
 
-    return PyLong_FromLongLong(pos);
+    return PyLong_FromLong(size);
 }
 
 
+PyDoc_STRVAR(StreamWrapper_fileno_doc,
+    "Return the underlying file descriptor if it exists.\n"
+    "\n"
+    ":rtype: int\n"
+    ":returns:\n"
+    "   The underlying file descriptor.\n"
+    ":raises ValueError:\n"
+    "   If the underlying stream is closed.\n"
+    ":raises io.UnsupportedOperationException:\n"
+    "   If the underlying stream is not based on a file descriptor."
+);
 static PyObject *
-StreamWrapper_fileno(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
+StreamWrapper_fileno_impl(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
 {
     if (is_closed (self)) return err_closed ();
 
-    int fd;
-
-    // Check if ref implements GFileDescriptorBased
     if (!G_IS_FILE_DESCRIPTOR_BASED(self->ref)) {
-        PyErr_SetString(PyExc_OSError, "Underlying stream does not expose a file descriptor");
-        return NULL;
+        return err_unsupported ("fileno");
     }
 
-    fd = g_file_descriptor_based_get_fd(G_FILE_DESCRIPTOR_BASED(self->ref));
+    int fd = g_file_descriptor_based_get_fd(G_FILE_DESCRIPTOR_BASED(self->ref));
     return PyLong_FromLong(fd);
 }
 
 
+PyDoc_STRVAR(StreamWrapper_isatty_doc,
+    ""
+);
 static PyObject *
-StreamWrapper_isatty(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
+StreamWrapper_isatty_impl(StreamWrapper *self, PyObject *Py_UNUSED(ignored))
 {
     if (is_closed (self)) return err_closed ();
 
@@ -523,37 +740,25 @@ StreamWrapper_dealloc(StreamWrapper *self) {
 
 
 static PyMethodDef StreamWrapper_methods[] = {
-    {"readable", (PyCFunction)StreamWrapper_readable, METH_NOARGS,
-     "Return whether the stream is readable"},
-    {"read", (PyCFunction)StreamWrapper_read, METH_VARARGS | METH_KEYWORDS,
-     "Read up to size bytes from the stream"},
-    {"readinto", (PyCFunction)StreamWrapper_readinto, METH_VARARGS,
-     "Read bytes into a writable buffer"},
-    {"writable", (PyCFunction)StreamWrapper_writable, METH_NOARGS,
-     "Return whether the stream is writable"},
-    {"write", (PyCFunction)StreamWrapper_write, METH_VARARGS,
-     "Write bytes to the underlying stream"},
-    {"seekable", (PyCFunction)StreamWrapper_seekable, METH_NOARGS,
-     "Return True if stream supports seeking"},
-    {"flush", (PyCFunction)StreamWrapper_flush, METH_NOARGS,
-     "Flush the output stream"},
-    {"tell", (PyCFunction)StreamWrapper_tell, METH_NOARGS,
-     "Flush and close the underlying stream"},
-    {"seek", (PyCFunction)StreamWrapper_seek, METH_VARARGS | METH_KEYWORDS,
-     "Flush and close the underlying stream"},
-    {"fileno", (PyCFunction)StreamWrapper_fileno, METH_NOARGS,
-     "Flush and close the underlying stream"},
-    {"close", (PyCFunction)StreamWrapper_close, METH_NOARGS,
-     "Flush and close the underlying stream"},
-    {"isatty", (PyCFunction)StreamWrapper_isatty, METH_NOARGS,
-     "Flush and close the underlying stream"},
+    {"close", (PyCFunction)StreamWrapper_close_impl, METH_NOARGS, StreamWrapper_close_doc},
+    {"readable", (PyCFunction)StreamWrapper_readable_impl, METH_NOARGS, StreamWrapper_readable_doc},
+    {"read", (PyCFunction)StreamWrapper_read_impl, METH_VARARGS | METH_KEYWORDS, StreamWrapper_read_doc},
+    {"readinto", (PyCFunction)StreamWrapper_readinto_impl, METH_VARARGS, StreamWrapper_readinto_doc},
+    {"writable", (PyCFunction)StreamWrapper_writable_impl, METH_NOARGS, StreamWrapper_writable_doc},
+    {"write", (PyCFunction)StreamWrapper_write_impl, METH_VARARGS, StreamWrapper_write_doc},
+    {"flush", (PyCFunction)StreamWrapper_flush_impl, METH_NOARGS, StreamWrapper_flush_doc},
+    {"seekable", (PyCFunction)StreamWrapper_seekable_impl, METH_NOARGS, StreamWrapper_seekable_doc},
+    {"tell", (PyCFunction)StreamWrapper_tell_impl, METH_NOARGS, StreamWrapper_tell_doc},
+    {"seek", (PyCFunction)StreamWrapper_seek_impl, METH_VARARGS | METH_KEYWORDS, StreamWrapper_seek_doc},
+    {"truncate", (PyCFunction)StreamWrapper_truncate_impl, METH_VARARGS | METH_KEYWORDS, StreamWrapper_truncate_doc},
+    {"fileno", (PyCFunction)StreamWrapper_fileno_impl, METH_NOARGS, StreamWrapper_fileno_doc},
+    {"isatty", (PyCFunction)StreamWrapper_isatty_impl, METH_NOARGS, StreamWrapper_isatty_doc},
     {NULL, NULL, 0, NULL}
 };
 
 
 static PyGetSetDef StreamWrapper_getsetters[] = {
-    {"closed", (getter)StreamWrapper_get_closed, NULL,
-     "True if the underlying stream is closed", NULL},
+    {"closed", (getter)StreamWrapper_get_closed, NULL, StreamWrapper_get_closed_doc, NULL},
     {NULL}
 };
 
@@ -561,7 +766,7 @@ static PyGetSetDef StreamWrapper_getsetters[] = {
 PyTypeObject StreamWrapperType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "gio_pyio.StreamWrapper",
-    .tp_doc = "GIO StreamWrapper",
+    .tp_doc = StreamWrapper_doc,
     .tp_basicsize = sizeof(StreamWrapper),
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_new = PyType_GenericNew,
