@@ -37,6 +37,11 @@ class GioPyIO(unittest.TestCase):
         self.f = gio_pyio.open(self.file, 'wb', buffering=0, native=False)
         self.assertTrue(isinstance(self.f, gio_pyio.StreamWrapper))
 
+    def testContextManager(self):
+        self.f.close()
+        with gio_pyio.open(self.file, 'wb', buffering=0, native=False) as f:
+            f.write(b'Hello!')
+
     def testWeakRefs(self):
         # verify weak references
         p = proxy(self.f)

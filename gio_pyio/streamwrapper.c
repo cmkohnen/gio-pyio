@@ -121,6 +121,45 @@ StreamWrapper_get_closed (StreamWrapper *self, void *closure)
     Py_RETURN_FALSE;
 }
 
+static gboolean
+close_wrapper (StreamWrapper *self)
+{
+  GError *error = NULL;
+
+  if (self->io)
+    {
+      if (!g_io_stream_close (self->io, NULL, &error))
+        {
+          PyErr_SetString (PyExc_IOError, error->message);
+          g_error_free (error);
+          return FALSE;
+        }
+      return TRUE;
+    }
+
+  if (self->input)
+    {
+      if (!g_input_stream_close (self->input, NULL, &error))
+        {
+          PyErr_SetString (PyExc_IOError, error->message);
+          g_error_free (error);
+          return FALSE;
+        }
+    }
+
+  if (self->output)
+    {
+      if (!g_output_stream_close (self->output, NULL, &error))
+        {
+          PyErr_SetString (PyExc_IOError, error->message);
+          g_error_free (error);
+          return FALSE;
+        }
+    }
+
+  return TRUE;
+}
+
 PyDoc_STRVAR (
     StreamWrapper_close_doc,
     "Flush and close the underlying stream.\n"
@@ -136,38 +175,8 @@ StreamWrapper_close_impl (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
   if (is_closed (self))
     Py_RETURN_NONE;
 
-  GError *error = NULL;
-
-  if (self->io)
-    {
-      if (!g_io_stream_close (self->io, NULL, &error))
-        {
-          PyErr_SetString (PyExc_IOError, error->message);
-          g_error_free (error);
-          return NULL;
-        }
-      Py_RETURN_NONE;
-    }
-
-  if (self->input)
-    {
-      if (!g_input_stream_close (self->input, NULL, &error))
-        {
-          PyErr_SetString (PyExc_IOError, error->message);
-          g_error_free (error);
-          return NULL;
-        }
-    }
-
-  if (self->output)
-    {
-      if (!g_output_stream_close (self->output, NULL, &error))
-        {
-          PyErr_SetString (PyExc_IOError, error->message);
-          g_error_free (error);
-          return NULL;
-        }
-    }
+  if (!close_wrapper (self))
+    return NULL;
 
   Py_RETURN_NONE;
 }
@@ -780,6 +789,29 @@ StreamWrapper_isatty_impl (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
   Py_RETURN_FALSE;
 }
 
+PyDoc_STRVAR (StreamWrapper_enter_doc, "Enter the runtime context.");
+static PyObject *
+StreamWrapper_enter_impl (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
+{
+  if (is_closed (self))
+    return err_closed ();
+
+  return Py_NewRef (self);
+}
+
+PyDoc_STRVAR (StreamWrapper_exit_doc, "Exit the runtime context.");
+static PyObject *
+StreamWrapper_exit_impl (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
+{
+  if (is_closed (self))
+    Py_RETURN_NONE;
+
+  if (!close_wrapper (self))
+    return NULL;
+
+  Py_RETURN_NONE;
+}
+
 static void
 StreamWrapper_dealloc (StreamWrapper *self)
 {
@@ -821,6 +853,10 @@ static PyMethodDef StreamWrapper_methods[]
           StreamWrapper_fileno_doc },
         { "isatty", (PyCFunction)StreamWrapper_isatty_impl, METH_NOARGS,
           StreamWrapper_isatty_doc },
+        { "__enter__", (PyCFunction)StreamWrapper_enter_impl, METH_NOARGS,
+          StreamWrapper_enter_doc },
+        { "__exit__", (PyCFunction)StreamWrapper_exit_impl,
+          METH_VARARGS | METH_KEYWORDS, StreamWrapper_exit_doc },
         { NULL, NULL, 0, NULL } };
 
 static PyGetSetDef StreamWrapper_getsetters[]
