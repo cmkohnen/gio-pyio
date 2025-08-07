@@ -200,6 +200,52 @@ StreamWrapper_readable_impl (StreamWrapper *self,
     Py_RETURN_FALSE;
 }
 
+static PyObject *
+read_until_eof (StreamWrapper *self)
+{
+  PyObject *result = PyBytes_FromStringAndSize (NULL, 0);
+  if (result == NULL)
+    return NULL;
+
+  gssize bufsize;
+
+  if (G_IS_BUFFERED_INPUT_STREAM (self->input))
+    bufsize = g_buffered_input_stream_get_buffer_size (
+        G_BUFFERED_INPUT_STREAM (self->input));
+  else
+    bufsize = DEFAULT_BUF_SIZE;
+
+  Py_ssize_t total_read = 0;
+  char buffer[bufsize];
+
+  while (TRUE)
+    {
+      GError *error = NULL;
+      gssize n
+          = g_input_stream_read (self->input, buffer, bufsize, NULL, &error);
+      if (n < 0)
+        {
+          Py_DECREF (result);
+          PyErr_SetString (PyExc_IOError,
+                           error ? error->message : "Read error");
+          g_clear_error (&error);
+          return NULL;
+        }
+      if (n == 0) // EOF
+        break;
+
+      if (_PyBytes_Resize (&result, total_read + n) < 0)
+        {
+          Py_DECREF (result);
+          return NULL;
+        }
+      memcpy (PyBytes_AS_STRING (result) + total_read, buffer, n);
+      total_read += n;
+    }
+
+  return result;
+}
+
 PyDoc_STRVAR (
     StreamWrapper_read_doc,
     "Read up to *size* bytes from the underlying stream and return them.\n"
@@ -236,77 +282,53 @@ StreamWrapper_read_impl (StreamWrapper *self, PyObject *args, PyObject *kwds)
     // Return empty bytes
     return PyBytes_FromStringAndSize ("", 0);
 
+  if (!(size > 0))
+    return read_until_eof (self);
+
+  // Allocate buffer for fixed-size read
+  char *buffer = g_malloc (size);
+  if (buffer == NULL)
+    {
+      PyErr_NoMemory ();
+      return NULL;
+    }
+
   GError *error = NULL;
-
-  if (size > 0)
+  gssize n;
+  if (!g_input_stream_read_all (self->input, buffer, (gssize)size, &n, NULL,
+                                &error))
     {
-      // Allocate buffer for fixed-size read
-      char *buffer = g_malloc (size);
-      if (buffer == NULL)
-        {
-          PyErr_NoMemory ();
-          return NULL;
-        }
-
-      gssize n;
-      if (!g_input_stream_read_all (self->input, buffer, (gssize)size, &n,
-                                    NULL, &error))
-        {
-          g_free (buffer);
-          PyErr_SetString (PyExc_IOError,
-                           error ? error->message : "Read error");
-          g_clear_error (&error);
-          return NULL;
-        }
-
-      PyObject *result = PyBytes_FromStringAndSize (buffer, n);
       g_free (buffer);
-      return result;
+      PyErr_SetString (PyExc_IOError, error ? error->message : "Read error");
+      g_clear_error (&error);
+      return NULL;
     }
-  else
-    {
-      // Read until EOF
-      PyObject *result = PyBytes_FromStringAndSize (NULL, 0);
-      if (result == NULL)
-        return NULL;
 
-      gssize bufsize;
+  PyObject *result = PyBytes_FromStringAndSize (buffer, n);
+  g_free (buffer);
+  return result;
+}
 
-      if (G_IS_BUFFERED_INPUT_STREAM (self->input))
-        bufsize = g_buffered_input_stream_get_buffer_size (
-            G_BUFFERED_INPUT_STREAM (self->input));
-      else
-        bufsize = DEFAULT_BUF_SIZE;
+PyDoc_STRVAR (StreamWrapper_readall_doc,
+              "Read and return all the bytes from the stream until EOF\n"
+              "\n"
+              ":rtype: bytes\n"
+              ":returns:\n"
+              "   Bytes read from the underlying stream.\n"
+              ":raises ValueError:\n"
+              "   If the underlying stream is closed.\n"
+              ":raises io.UnsupportedOperationException:\n"
+              "   If the underlying stream is not readable.");
+static PyObject *
+StreamWrapper_readall_impl (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
+{
+  if (is_closed (self))
+    return err_closed ();
 
-      Py_ssize_t total_read = 0;
-      char buffer[bufsize];
+  if (!is_readable (self))
+    return err_not_readable ();
 
-      while (TRUE)
-        {
-          gssize n = g_input_stream_read (self->input, buffer, bufsize, NULL,
-                                          &error);
-          if (n < 0)
-            {
-              Py_DECREF (result);
-              PyErr_SetString (PyExc_IOError,
-                               error ? error->message : "Read error");
-              g_clear_error (&error);
-              return NULL;
-            }
-          if (n == 0) // EOF
-            break;
-
-          if (_PyBytes_Resize (&result, total_read + n) < 0)
-            {
-              Py_DECREF (result);
-              return NULL;
-            }
-          memcpy (PyBytes_AS_STRING (result) + total_read, buffer, n);
-          total_read += n;
-        }
-
-      return result;
-    }
+  return read_until_eof (self);
 }
 
 PyDoc_STRVAR (
@@ -776,6 +798,8 @@ static PyMethodDef StreamWrapper_methods[]
           StreamWrapper_readable_doc },
         { "read", (PyCFunction)StreamWrapper_read_impl,
           METH_VARARGS | METH_KEYWORDS, StreamWrapper_read_doc },
+        { "readall", (PyCFunction)StreamWrapper_readall_impl,
+          METH_VARARGS | METH_KEYWORDS, StreamWrapper_readall_doc },
         { "readinto", (PyCFunction)StreamWrapper_readinto_impl, METH_VARARGS,
           StreamWrapper_readinto_doc },
         { "writable", (PyCFunction)StreamWrapper_writable_impl, METH_NOARGS,
