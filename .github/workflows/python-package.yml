@@ -31,7 +31,7 @@ jobs:
             libffi-dev \
             libgirepository1.0-dev \
             libglib2.0-dev \
-            python-gi-dev
+            python-gi-dev \
             libcairo-gobject2 \
             libcairo2-dev
         python -m pip install --upgrade pip
