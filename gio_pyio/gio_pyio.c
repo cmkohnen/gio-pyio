@@ -1,7 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include "gio_pyio.h"
-
-extern PyTypeObject StreamWrapperType;
+#include "streamwrapper.h"
+#include <Python.h>
 
 PyObject *UnsupportedOperation = NULL;
 PyObject *PyGObjectClass = NULL;
@@ -22,9 +22,6 @@ PyInit__gio_pyio (void)
 {
   PyObject *m;
 
-  if (PyType_Ready (&StreamWrapperType) < 0)
-    return NULL;
-
   PyObject *io_module = PyImport_ImportModule ("io");
   if (!io_module)
     return NULL;
@@ -40,12 +37,7 @@ PyInit__gio_pyio (void)
     return NULL;
   Py_INCREF (UnsupportedOperation);
 
-  PyObject *bases = PyTuple_Pack (1, io_base);
   Py_DECREF (io_base);
-  if (!bases)
-    return NULL;
-
-  StreamWrapperType.tp_bases = bases;
 
   PyObject *gi_module = PyImport_ImportModule ("gi.repository.GObject");
   if (!gi_module)
@@ -65,8 +57,16 @@ PyInit__gio_pyio (void)
   if (m == NULL)
     return NULL;
 
-  Py_INCREF (&StreamWrapperType);
-  PyModule_AddObject (m, "StreamWrapper", (PyObject *)&StreamWrapperType);
+  PyObject *streamwrapper_type = PyStreamWrapperType_Create ();
+  if (!streamwrapper_type)
+    return NULL;
+
+  if (PyModule_AddObject (m, "StreamWrapper", streamwrapper_type) < 0)
+    {
+      Py_DECREF (streamwrapper_type);
+      Py_DECREF (m);
+      return NULL;
+    }
 
   return m;
 }

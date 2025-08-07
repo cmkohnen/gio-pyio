@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #define DEFAULT_BUF_SIZE 4096
+#include "streamwrapper.h"
 #include "gio_pyio.h"
 #include <gio/gfiledescriptorbased.h>
 #include <gio/gio.h>
@@ -827,14 +828,23 @@ static PyGetSetDef StreamWrapper_getsetters[]
           StreamWrapper_get_closed_doc, NULL },
         { NULL } };
 
-PyTypeObject StreamWrapperType = {
-  PyVarObject_HEAD_INIT (NULL, 0).tp_name = "gio_pyio.StreamWrapper",
-  .tp_doc = StreamWrapper_doc,
-  .tp_basicsize = sizeof (StreamWrapper),
-  .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_new = PyType_GenericNew,
-  .tp_init = (initproc)StreamWrapper_init,
-  .tp_dealloc = (destructor)StreamWrapper_dealloc,
-  .tp_methods = StreamWrapper_methods,
-  .tp_getset = StreamWrapper_getsetters,
-};
+static PyType_Slot StreamWrapper_slots[]
+    = { { Py_tp_doc, (void *)StreamWrapper_doc },
+        { Py_tp_new, (void *)PyType_GenericNew },
+        { Py_tp_init, (void *)StreamWrapper_init },
+        { Py_tp_dealloc, (void *)StreamWrapper_dealloc },
+        { Py_tp_methods, (void *)StreamWrapper_methods },
+        { Py_tp_getset, (void *)StreamWrapper_getsetters },
+        { 0, NULL } };
+
+static PyType_Spec StreamWrapper_spec = { .name = "gio_pyio.StreamWrapper",
+                                          .basicsize = sizeof (StreamWrapper),
+                                          .itemsize = 0,
+                                          .flags = Py_TPFLAGS_DEFAULT,
+                                          .slots = StreamWrapper_slots };
+
+PyObject *
+PyStreamWrapperType_Create (void)
+{
+  return PyType_FromSpec (&StreamWrapper_spec);
+}
