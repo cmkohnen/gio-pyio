@@ -28,29 +28,19 @@ PyInit__gio_pyio (void)
 
   UnsupportedOperation
       = PyObject_GetAttrString (io_module, "UnsupportedOperation");
-  PyObject *io_base = PyObject_GetAttrString (io_module, "IOBase");
-
   Py_DECREF (io_module);
-  if (!io_base)
-    return NULL;
   if (!UnsupportedOperation)
     return NULL;
   Py_INCREF (UnsupportedOperation);
 
-  Py_DECREF (io_base);
-
   PyObject *gi_module = PyImport_ImportModule ("gi.repository.GObject");
   if (!gi_module)
-    {
-      return NULL;
-    }
+    return NULL;
 
   PyGObjectClass = PyObject_GetAttrString (gi_module, "GObject");
   Py_DECREF (gi_module);
   if (!PyGObjectClass)
-    {
-      return NULL;
-    }
+    return NULL;
   Py_INCREF (PyGObjectClass);
 
   m = PyModule_Create (&_gio_pyio_module);
