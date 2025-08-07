@@ -46,7 +46,7 @@ jobs:
     - name: Build
       run: |
         python -m build
-        python -m pip install -e .
+        python -m pip install --verbose --no-build-isolation .
         twine check dist/*
     - name: Test with pytest
       run: |
