@@ -812,6 +812,14 @@ StreamWrapper_exit_impl (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
   Py_RETURN_NONE;
 }
 
+PyObject *
+StreamWrapper_pickle_unsupported (StreamWrapper *self,
+                                  PyObject *Py_UNUSED (ignored))
+{
+  PyErr_SetString (PyExc_TypeError, "Cannot pickle StreamWrapper instances");
+  return NULL;
+}
+
 static void
 StreamWrapper_dealloc (StreamWrapper *self)
 {
@@ -857,6 +865,8 @@ static PyMethodDef StreamWrapper_methods[]
           StreamWrapper_enter_doc },
         { "__exit__", (PyCFunction)StreamWrapper_exit_impl,
           METH_VARARGS | METH_KEYWORDS, StreamWrapper_exit_doc },
+        { "__getstate__", (PyCFunction)StreamWrapper_pickle_unsupported,
+          METH_NOARGS, NULL },
         { NULL, NULL, 0, NULL } };
 
 static PyGetSetDef StreamWrapper_getsetters[]

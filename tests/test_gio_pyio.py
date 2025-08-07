@@ -6,6 +6,7 @@
 import contextlib
 import gc
 import json
+import pickle
 import subprocess
 import sys
 import unittest
@@ -41,6 +42,13 @@ class GioPyIO(unittest.TestCase):
         self.f.close()
         with gio_pyio.open(self.file, 'wb', buffering=0, native=False) as f:
             f.write(b'Hello!')
+
+    def testPickle(self):
+        data = {'test': 'Hello!'}
+        pickle.dump(data, self.f)
+
+        new_file = gio_pyio.open(self.file, 'rb', buffering=0, native=False)
+        self.assertRaises(TypeError, pickle.dump, new_file, self.f)
 
     def testWeakRefs(self):
         # verify weak references
