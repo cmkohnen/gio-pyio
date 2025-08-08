@@ -218,7 +218,6 @@ read_until_eof (StreamWrapper *self)
     return NULL;
 
   gssize bufsize;
-
   if (G_IS_BUFFERED_INPUT_STREAM (self->input))
     bufsize = g_buffered_input_stream_get_buffer_size (
         G_BUFFERED_INPUT_STREAM (self->input));
@@ -470,6 +469,128 @@ StreamWrapper_write_impl (StreamWrapper *self, PyObject *args)
     }
 
   return PyLong_FromSsize_t (bytes_written);
+}
+
+PyDoc_STRVAR (StreamWrapper_writelines_doc,
+              "Write a list of lines to the stream.\n"
+              "\n"
+              "Line separators are not added, so it is usual for each\n"
+              "of the lines provided to have a line separator at the end.\n"
+              "\n"
+              ":param iterable lines:\n"
+              "   List of lines to be written to the underlying stream.\n"
+              ":raises ValueError:\n"
+              "   If the underlying stream is closed.\n"
+              ":raises io.UnsupportedOperationException:\n"
+              "   If the underlying stream can not be written to.");
+static PyObject *
+StreamWrapper_writelines_impl (StreamWrapper *self, PyObject *args)
+{
+  PyObject *iterable;
+  if (!PyArg_ParseTuple (args, "O", &iterable))
+    return NULL;
+
+  PyObject *iterator = PyObject_GetIter (iterable);
+  if (!iterator)
+    {
+      PyErr_SetString (PyExc_TypeError, "Argument must be iterable");
+      return NULL;
+    }
+
+  if (is_closed (self))
+    return err_closed ();
+
+  if (!is_writable (self))
+    return err_not_writable ();
+
+  gssize bufsize;
+  if (G_IS_BUFFERED_OUTPUT_STREAM (self->output))
+    bufsize = g_buffered_output_stream_get_buffer_size (
+        G_BUFFERED_OUTPUT_STREAM (self->output));
+  else
+    bufsize = DEFAULT_BUF_SIZE;
+
+  char buffer[bufsize];
+  gsize buf_pos = 0;
+  GError *error = NULL;
+
+  PyObject *item;
+  while ((item = PyIter_Next (iterator)))
+    {
+      if (!PyBytes_Check (item))
+        {
+          PyErr_SetString (
+              PyExc_TypeError,
+              "writelines() argument must be an iterable of bytes");
+          Py_DECREF (item);
+          Py_DECREF (iterator);
+          return NULL;
+        }
+
+      char *data = PyBytes_AS_STRING (item);
+      Py_ssize_t data_len = PyBytes_GET_SIZE (item);
+
+      while (data_len > 0)
+        {
+          gsize space_left = bufsize - buf_pos;
+
+          if ((gsize)data_len <= space_left)
+            {
+              /* Fits in buffer */
+              memcpy (buffer + buf_pos, data, data_len);
+              buf_pos += data_len;
+              data_len = 0;
+              continue;
+            }
+
+          /* Fill buffer and flush */
+          memcpy (buffer + buf_pos, data, space_left);
+          buf_pos += space_left;
+
+          gsize written = 0;
+          if (!g_output_stream_write_all (G_OUTPUT_STREAM (self->output),
+                                          buffer, buf_pos, &written, NULL,
+                                          &error))
+            {
+              PyErr_SetString (PyExc_IOError,
+                               error ? error->message : "Write failed");
+              if (error)
+                g_clear_error (&error);
+              Py_DECREF (item);
+              Py_DECREF (iterator);
+              return NULL;
+            }
+          buf_pos = 0;
+
+          data += space_left;
+          data_len -= space_left;
+        }
+
+      Py_DECREF (item);
+    }
+
+  /* Final flush of remaining data in buffer */
+  if (buf_pos > 0)
+    {
+      gsize written = 0;
+      if (!g_output_stream_write_all (G_OUTPUT_STREAM (self->output), buffer,
+                                      buf_pos, &written, NULL, &error))
+        {
+          PyErr_SetString (PyExc_IOError,
+                           error ? error->message : "Write failed");
+          if (error)
+            g_clear_error (&error);
+          Py_DECREF (iterator);
+          return NULL;
+        }
+    }
+
+  Py_DECREF (iterator);
+
+  if (PyErr_Occurred ())
+    return NULL;
+
+  Py_RETURN_NONE;
 }
 
 PyDoc_STRVAR (
@@ -848,6 +969,8 @@ static PyMethodDef StreamWrapper_methods[]
           StreamWrapper_writable_doc },
         { "write", (PyCFunction)StreamWrapper_write_impl, METH_VARARGS,
           StreamWrapper_write_doc },
+        { "writelines", (PyCFunction)StreamWrapper_writelines_impl,
+          METH_VARARGS, StreamWrapper_writelines_doc },
         { "flush", (PyCFunction)StreamWrapper_flush_impl, METH_NOARGS,
           StreamWrapper_flush_doc },
         { "seekable", (PyCFunction)StreamWrapper_seekable_impl, METH_NOARGS,
