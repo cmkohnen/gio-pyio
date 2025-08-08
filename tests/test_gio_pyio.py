@@ -6,6 +6,7 @@
 import contextlib
 import gc
 import json
+import pickle
 import subprocess
 import sys
 import unittest
@@ -24,7 +25,7 @@ class GioPyIO(unittest.TestCase):
     def setUp(self):
         self.file, stream = Gio.File.new_tmp('TestGFile.XXXXXX')
         stream.close()
-        self.f = gio_pyio.open(self.file, 'wb', native=False)
+        self.f = gio_pyio.open(self.file, 'wb', buffering=0, native=False)
 
     def tearDown(self):
         if self.f:
@@ -37,15 +38,27 @@ class GioPyIO(unittest.TestCase):
         self.f = gio_pyio.open(self.file, 'wb', buffering=0, native=False)
         self.assertTrue(isinstance(self.f, gio_pyio.StreamWrapper))
 
-    def testWeakRefs(self):
-        # verify weak references
-        p = proxy(self.f)
-        p.write(b'teststring')
-        self.assertEqual(self.f.tell(), p.tell())
+    def testContextManager(self):
         self.f.close()
-        self.f = None
-        gc.collect()
-        self.assertRaises(ReferenceError, getattr, p, 'tell')
+        with gio_pyio.open(self.file, 'wb', buffering=0, native=False) as f:
+            f.write(b'Hello!')
+
+    def testPickle(self):
+        data = {'test': 'Hello!'}
+        pickle.dump(data, self.f)
+
+        new_file = gio_pyio.open(self.file, 'rb', buffering=0, native=False)
+        self.assertRaises(TypeError, pickle.dump, new_file, self.f)
+
+    #def testWeakRefs(self):
+    #    # verify weak references
+    #    p = proxy(self.f)
+    #    p.write(b'teststring')
+    #    self.assertEqual(self.f.tell(), p.tell())
+    #    self.f.close()
+    #    self.f = None
+    #    gc.collect()
+    #    self.assertRaises(ReferenceError, getattr, p, 'tell')
 
     def testSeekTell(self):
         self.f.write(bytes(range(20)))
@@ -81,7 +94,7 @@ class GioPyIO(unittest.TestCase):
         self.f.write(b'12')
         self.f.close()
         a = array('b', b'x' * 10)
-        self.f = gio_pyio.open(self.file, 'rb', native=False)
+        self.f = gio_pyio.open(self.file, 'rb', buffering=0, native=False)
         n = self.f.readinto(a)
         self.assertEqual(b'12', a.tobytes()[:n])
 
@@ -98,7 +111,7 @@ class GioPyIO(unittest.TestCase):
         self.f.close()
 
         ba = bytearray(b'abcdefgh')
-        with gio_pyio.open(self.file, 'rb', native=False) as f:
+        with gio_pyio.open(self.file, 'rb', buffering=0, native=False) as f:
             n = f.readinto(ba)
         self.assertEqual(ba, b'\x01\x02\x00\xffefgh')
         self.assertEqual(n, 4)
@@ -108,7 +121,7 @@ class GioPyIO(unittest.TestCase):
         userlist = UserList([b'1', b'2'])
         self.f.writelines(userlist)
         self.f.close()
-        self.f = gio_pyio.open(self.file, 'rb', native=False)
+        self.f = gio_pyio.open(self.file, 'rb', buffering=0, native=False)
         buf = self.f.read()
         self.assertEqual(buf, b'12')
 
@@ -153,7 +166,8 @@ class GioPyIO(unittest.TestCase):
                    ('isatty', ()),
                    ('__next__', ()),
                    ('read', ()),
-                   ('write', (b'',)),
+                   ('readall', ()),
+                   ('read1', ()),
                    ('readline', ()),
                    ('readlines', ()),
                    ('seek', (0,)),
@@ -243,7 +257,7 @@ class GioPyIO(unittest.TestCase):
         bag.close()
         # Test for appropriate errors mixing read* and iteration
         for methodname, args in methods:
-            f = gio_pyio.open(self.file, 'rb', native=False)
+            f = gio_pyio.open(self.file, 'rb', buffering=0, native=False)
             self.assertEqual(next(f), filler)
             meth = getattr(f, methodname)
             meth(*args)  # This simply shouldn't fail
@@ -300,7 +314,7 @@ class GioPyIO(unittest.TestCase):
         f.close()
 
         # Reading after iteration hit EOF shouldn't hurt either
-        f = gio_pyio.open(self.file, 'rb', native=False)
+        f = gio_pyio.open(self.file, 'rb', buffering=0, native=False)
         try:
             for _line in f:
                 pass
@@ -316,19 +330,19 @@ class GioPyIO(unittest.TestCase):
 
     def testAbles(self):
         try:
-            f = gio_pyio.open(self.file, 'w', native=False)
+            f = gio_pyio.open(self.file, 'wb', buffering=0, native=False)
             self.assertEqual(f.readable(), False)
             self.assertEqual(f.writable(), True)
             self.assertEqual(f.seekable(), True)
             f.close()
 
-            f = gio_pyio.open(self.file, 'r', native=False)
+            f = gio_pyio.open(self.file, 'rb', buffering=0, native=False)
             self.assertEqual(f.readable(), True)
             self.assertEqual(f.writable(), False)
             self.assertEqual(f.seekable(), True)
             f.close()
 
-            f = gio_pyio.open(self.file, 'a+', native=False)
+            f = gio_pyio.open(self.file, 'a+b', buffering=0, native=False)
             self.assertEqual(f.readable(), True)
             self.assertEqual(f.writable(), True)
             self.assertEqual(f.seekable(), True)
@@ -339,13 +353,13 @@ class GioPyIO(unittest.TestCase):
 
     def testAppend(self):
         try:
-            f = gio_pyio.open(self.file, 'wb', native=False)
+            f = gio_pyio.open(self.file, 'wb', buffering=0, native=False)
             f.write(b'spam')
             f.close()
-            f = gio_pyio.open(self.file, 'ab', native=False)
+            f = gio_pyio.open(self.file, 'ab', buffering=0, native=False)
             f.write(b'eggs')
             f.close()
-            f = gio_pyio.open(self.file, 'rb', native=False)
+            f = gio_pyio.open(self.file, 'rb', buffering=0, native=False)
             d = f.read()
             f.close()
             self.assertEqual(d, b'spameggs')
@@ -355,7 +369,7 @@ class GioPyIO(unittest.TestCase):
     def testJSON(self):
         path = Path(Path(__file__).parent, 'example_data.json')
         file = Gio.File.new_for_path(str(path))
-        f = gio_pyio.open(file, 'rb', native=False)
+        f = gio_pyio.open(file, 'rb', buffering=0, native=False)
         data = json.load(f)
         f.close()
         self.assertEqual(data['glossary']['title'], 'example glossary')

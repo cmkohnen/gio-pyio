@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
     steps:
     - uses: actions/checkout@v4
@@ -31,10 +31,11 @@ jobs:
             libffi-dev \
             libgirepository1.0-dev \
             libglib2.0-dev \
+            python-gi-dev \
             libcairo-gobject2 \
             libcairo2-dev
         python -m pip install --upgrade pip
-        python -m pip install flake8 pytest twine build
+        python -m pip install flake8 pytest twine build meson-python ninja setuptools_scm
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
     - name: Lint with flake8
       run: |
@@ -45,7 +46,7 @@ jobs:
     - name: Build
       run: |
         python -m build
-        python -m pip install -e .
+        python -m pip install --verbose --no-build-isolation .
         twine check dist/*
     - name: Test with pytest
       run: |
