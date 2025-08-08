@@ -10,6 +10,7 @@
 typedef struct
 {
   PyObject_HEAD GInputStream *input;
+  GDataInputStream *data_input;
   GOutputStream *output;
   GIOStream *io;
 } StreamWrapper;
@@ -74,6 +75,23 @@ StreamWrapper_init (StreamWrapper *self, PyObject *args, PyObject *kwds)
     }
   else
     goto typeerr;
+
+  if (self->input)
+    {
+      self->data_input = g_data_input_stream_new (self->input);
+      if (!self->data_input)
+        {
+          PyErr_SetString (PyExc_RuntimeError,
+                           "Failed to create GDataInputStream");
+          g_object_unref (self->input);
+          if (self->output)
+            g_object_unref (self->output);
+          if (self->io)
+            g_object_unref (self->io);
+        }
+      g_data_input_stream_set_newline_type (self->data_input,
+                                            G_DATA_STREAM_NEWLINE_TYPE_LF);
+    }
 
   return 0;
 
@@ -389,6 +407,63 @@ StreamWrapper_readinto_impl (StreamWrapper *self, PyObject *args)
   PyBuffer_Release (&view);
 
   return PyLong_FromSsize_t (n_read);
+}
+
+PyDoc_STRVAR (StreamWrapper_readline_doc,
+              "Read and return one line from the stream. "
+              "If size is specified, at most size bytes will be read.\n"
+              "\n"
+              ":rtype: bytes\n"
+              ":returns:\n"
+              "   Bytes read from the underlying stream.\n"
+              ":raises ValueError:\n"
+              "   If the underlying stream is closed.\n"
+              ":raises io.UnsupportedOperationException:\n"
+              "   If the underlying stream is not readable.");
+static PyObject *
+StreamWrapper_readline_impl (StreamWrapper *self, PyObject *args)
+{
+  Py_ssize_t size = -1;
+  if (!PyArg_ParseTuple (args, "|n", &size))
+    return NULL;
+
+  if (is_closed (self))
+    return err_closed ();
+
+  if (!is_readable (self))
+    return err_not_readable ();
+
+  if (size == 0)
+    return PyBytes_FromStringAndSize ("", 0);
+
+  gsize length = 0;
+  GError *error = NULL;
+  gchar *line = NULL;
+
+  line = g_data_input_stream_read_line (self->data_input, &length, NULL,
+                                        &error);
+  if (!line)
+    {
+      if (error)
+        {
+          PyErr_SetString (PyExc_IOError, error->message);
+          g_clear_error (&error);
+          return NULL;
+        }
+      else
+        return PyBytes_FromStringAndSize ("", 0);
+    }
+  if (size > 0 && length > (gsize)size)
+    {
+      length = (gsize)size;
+    }
+
+  PyObject *result = PyBytes_FromStringAndSize (NULL, length + 1);
+  char *buf = PyBytes_AS_STRING (result);
+  memcpy (buf, line, length);
+  g_free (line);
+  buf[length] = '\n';
+  return result;
 }
 
 static gboolean
@@ -934,6 +1009,51 @@ StreamWrapper_exit_impl (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
   Py_RETURN_NONE;
 }
 
+static PyObject *
+StreamWrapper_iter (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
+{
+  Py_INCREF (self);
+  return (PyObject *)self;
+}
+
+static PyObject *
+StreamWrapper_iternext (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
+{
+  if (is_closed (self))
+    return err_closed ();
+
+  if (!is_readable (self))
+    return err_not_readable ();
+
+  gsize length = 0;
+  GError *error = NULL;
+  gchar *line = NULL;
+
+  line = g_data_input_stream_read_line (self->data_input, &length, NULL,
+                                        &error);
+  if (!line && error)
+    {
+      PyErr_SetString (PyExc_IOError, error->message);
+      g_clear_error (&error);
+      return NULL;
+    }
+
+  if (length == 0)
+    {
+      /* End of iteration */
+      g_free (line);
+      PyErr_SetNone (PyExc_StopIteration);
+      return NULL;
+    }
+
+  PyObject *result = PyBytes_FromStringAndSize (NULL, length + 1);
+  char *buf = PyBytes_AS_STRING (result);
+  memcpy (buf, line, length);
+  g_free (line);
+  buf[length] = '\n';
+  return result;
+}
+
 PyObject *
 StreamWrapper_pickle_unsupported (StreamWrapper *self,
                                   PyObject *Py_UNUSED (ignored))
@@ -946,7 +1066,10 @@ static void
 StreamWrapper_dealloc (StreamWrapper *self)
 {
   if (self->input)
-    g_object_unref (self->input);
+    {
+      g_object_unref (self->input);
+      g_object_unref (self->data_input);
+    }
   if (self->output)
     g_object_unref (self->output);
   if (self->io)
@@ -965,6 +1088,8 @@ static PyMethodDef StreamWrapper_methods[]
           METH_VARARGS | METH_KEYWORDS, StreamWrapper_readall_doc },
         { "readinto", (PyCFunction)StreamWrapper_readinto_impl, METH_VARARGS,
           StreamWrapper_readinto_doc },
+        { "readline", (PyCFunction)StreamWrapper_readline_impl, METH_VARARGS,
+          StreamWrapper_readline_doc },
         { "writable", (PyCFunction)StreamWrapper_writable_impl, METH_NOARGS,
           StreamWrapper_writable_doc },
         { "write", (PyCFunction)StreamWrapper_write_impl, METH_VARARGS,
@@ -1005,6 +1130,8 @@ static PyType_Slot StreamWrapper_slots[]
         { Py_tp_dealloc, (void *)StreamWrapper_dealloc },
         { Py_tp_methods, (void *)StreamWrapper_methods },
         { Py_tp_getset, (void *)StreamWrapper_getsetters },
+        { Py_tp_iter, (void *)StreamWrapper_iter },
+        { Py_tp_iternext, (void *)StreamWrapper_iternext },
         { 0, NULL } };
 
 static PyType_Spec StreamWrapper_spec = { .name = "gio_pyio.StreamWrapper",
