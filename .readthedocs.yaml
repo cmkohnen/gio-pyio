@@ -9,6 +9,9 @@ build:
     - libffi-dev
     - libgirepository2.0-dev
     - libglib2.0-dev
+    - python-gi-dev
+    - libcairo-gobject2
+    - libcairo2-dev
 
 sphinx:
   configuration: docs/source/conf.py
