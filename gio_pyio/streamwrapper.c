@@ -231,10 +231,6 @@ StreamWrapper_readable_impl (StreamWrapper *self,
 static PyObject *
 read_until_eof (StreamWrapper *self)
 {
-  PyObject *result = PyBytes_FromStringAndSize (NULL, 0);
-  if (result == NULL)
-    return NULL;
-
   gssize bufsize;
   if (G_IS_BUFFERED_INPUT_STREAM (self->input))
     bufsize = g_buffered_input_stream_get_buffer_size (
@@ -242,34 +238,75 @@ read_until_eof (StreamWrapper *self)
   else
     bufsize = DEFAULT_BUF_SIZE;
 
-  Py_ssize_t total_read = 0;
-  char buffer[bufsize];
+  GPtrArray *chunks = g_ptr_array_new_with_free_func (g_free);
+  if (!chunks)
+    {
+      PyErr_NoMemory ();
+      return NULL;
+    }
+
+  GError *error = NULL;
+  Py_ssize_t total_size = 0;
 
   while (TRUE)
     {
-      GError *error = NULL;
+      char *buffer = g_malloc (bufsize);
+      if (!buffer)
+        {
+          PyErr_NoMemory ();
+          g_ptr_array_free (chunks, TRUE);
+          return NULL;
+        }
+
       gssize n
           = g_input_stream_read (self->input, buffer, bufsize, NULL, &error);
       if (n < 0)
         {
-          Py_DECREF (result);
           PyErr_SetString (PyExc_IOError,
                            error ? error->message : "Read error");
           g_clear_error (&error);
+          g_free (buffer);
+          g_ptr_array_free (chunks, TRUE);
           return NULL;
         }
-      if (n == 0) // EOF
-        break;
+      if (n == 0)
+        { // EOF
+          g_free (buffer);
+          break;
+        }
 
-      if (_PyBytes_Resize (&result, total_read + n) < 0)
+      if (n < bufsize)
         {
-          Py_DECREF (result);
-          return NULL;
+          // Resize buffer to actual size read
+          char *shrunk = g_realloc (buffer, n);
+          if (shrunk)
+            buffer = shrunk; // ignore realloc failure, buffer still valid
         }
-      memcpy (PyBytes_AS_STRING (result) + total_read, buffer, n);
-      total_read += n;
+
+      g_ptr_array_add (chunks, buffer);
+      total_size += n;
     }
 
+  PyObject *result = PyBytes_FromStringAndSize (NULL, total_size);
+  if (!result)
+    {
+      g_ptr_array_free (chunks, TRUE);
+      return NULL;
+    }
+
+  // Copy chunks into the result
+  char *dest = PyBytes_AS_STRING (result);
+  Py_ssize_t offset = 0;
+  for (guint i = 0; i < chunks->len; i++)
+    {
+      char *chunk = g_ptr_array_index (chunks, i);
+      gssize chunk_size
+          = (i == chunks->len - 1) ? total_size - offset : bufsize;
+      memcpy (dest + offset, chunk, chunk_size);
+      offset += chunk_size;
+    }
+
+  g_ptr_array_free (chunks, TRUE);
   return result;
 }
 
