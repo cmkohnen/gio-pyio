@@ -796,7 +796,8 @@ StreamWrapper_enter_impl (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
   if (is_closed (self))
     return err_closed ();
 
-  return Py_NewRef (self);
+  Py_INCREF (self);
+  return (PyObject *)self;
 }
 
 PyDoc_STRVAR (StreamWrapper_exit_doc, "Exit the runtime context.");
