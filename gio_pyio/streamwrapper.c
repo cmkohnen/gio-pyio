@@ -15,21 +15,21 @@ typedef struct
   GIOStream *io;
 } StreamWrapper;
 
-PyDoc_STRVAR (StreamWrapper_doc,
-              "Wrap a stream as a `file object`_.\n"
-              "\n"
-              "See :func:`open` for a convenience method to open a file as a\n"
-              "`file object`_. Note, that this does not implement buffering, "
-              "seeking, etc. \n"
-              "and relies on the capabilities of *stream*.\n"
-              "\n"
-              ":param stream stream:\n"
-              "   A stream to be wrapped.\n"
-              ":raises TypeError:\n"
-              "   Invalid argument.\n"
-              "\n"
-              ".. _file object: "
-              "https://docs.python.org/3/glossary.html#term-file-object");
+PyDoc_STRVAR (
+    StreamWrapper_doc,
+    "Wrap a stream as a `file object`_.\n"
+    "\n"
+    "See :func:`open` for a convenience method to open a file as a\n"
+    "`file object`_. Note, that this is only seekable if the stream\n"
+    "supports it."
+    "\n"
+    ":param stream stream:\n"
+    "   A stream to be wrapped.\n"
+    ":raises TypeError:\n"
+    "   Invalid argument.\n"
+    "\n"
+    ".. _file object: "
+    "https://docs.python.org/3/glossary.html#term-file-object");
 
 static int
 StreamWrapper_init (StreamWrapper *self, PyObject *args, PyObject *kwds)
@@ -78,17 +78,23 @@ StreamWrapper_init (StreamWrapper *self, PyObject *args, PyObject *kwds)
 
   if (self->input)
     {
-      self->data_input = g_data_input_stream_new (self->input);
-      if (!self->data_input)
+      if (G_IS_DATA_INPUT_STREAM (self->input))
+        self->data_input = G_DATA_INPUT_STREAM (self->input);
+      else
         {
-          PyErr_SetString (PyExc_RuntimeError,
-                           "Failed to create GDataInputStream");
-          g_object_unref (self->input);
-          if (self->output)
-            g_object_unref (self->output);
-          if (self->io)
-            g_object_unref (self->io);
+          self->data_input = g_data_input_stream_new (self->input);
+          if (!self->data_input)
+            {
+              PyErr_SetString (PyExc_RuntimeError,
+                               "Failed to create GDataInputStream");
+              g_object_unref (self->input);
+              if (self->output)
+                g_object_unref (self->output);
+              if (self->io)
+                g_object_unref (self->io);
+            }
         }
+
       g_data_input_stream_set_newline_type (self->data_input,
                                             G_DATA_STREAM_NEWLINE_TYPE_LF);
     }
