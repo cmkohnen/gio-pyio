@@ -415,7 +415,7 @@ PyDoc_STRVAR (StreamWrapper_readline_doc,
               "\n"
               ":rtype: bytes\n"
               ":returns:\n"
-              "   Bytes read from the underlying stream.\n"
+              "   Line read from the underlying stream.\n"
               ":raises ValueError:\n"
               "   If the underlying stream is closed.\n"
               ":raises io.UnsupportedOperationException:\n"
@@ -464,6 +464,100 @@ StreamWrapper_readline_impl (StreamWrapper *self, PyObject *args)
   g_free (line);
   buf[length] = '\n';
   return result;
+}
+
+PyDoc_STRVAR (
+    StreamWrapper_readlines_doc,
+    "Read and return a list of lines from the stream. "
+    "hint can be specified to control the number of lines read:\n"
+    "no more lines will be read if the total size \n"
+    "(in bytes/characters) of all lines so far exceeds hint.\n"
+    "\n"
+    "hint values of 0 or less, as well as None, are treated as no hint.\n"
+    "\n"
+    ":rtype: list\n"
+    ":returns:\n"
+    "   List of lines read from the underlying stream.\n"
+    ":raises ValueError:\n"
+    "   If the underlying stream is closed.\n"
+    ":raises io.UnsupportedOperationException:\n"
+    "   If the underlying stream is not readable.");
+static PyObject *
+StreamWrapper_readlines_impl (StreamWrapper *self, PyObject *args,
+                              PyObject *kwds)
+{
+  static char *kwlist[] = { "hint", NULL };
+  Py_ssize_t hint = 0;
+  if (!PyArg_ParseTupleAndKeywords (args, kwds, "|n", kwlist, &hint))
+    return NULL;
+
+  if (is_closed (self))
+    return err_closed ();
+
+  if (!is_readable (self))
+    return err_not_readable ();
+
+  GError *error = NULL;
+  GPtrArray *lines_array = g_ptr_array_new_with_free_func (g_free);
+  if (!lines_array)
+    return PyErr_NoMemory ();
+
+  Py_ssize_t total_bytes = 0;
+
+  while (1)
+    {
+      gsize length = 0;
+      gchar *line_buf = g_data_input_stream_read_line (self->data_input,
+                                                       &length, NULL, &error);
+
+      if (error)
+        {
+          PyErr_SetString (PyExc_IOError, error->message);
+          g_error_free (error);
+          g_ptr_array_free (lines_array, TRUE);
+          return NULL;
+        }
+
+      if (!line_buf) // EOF
+        break;
+
+      // append '\n' since it's stripped
+      gchar *line = g_malloc (length + 2);
+      memcpy (line, line_buf, length);
+      line[length] = '\n';
+      line[length + 1] = '\0';
+      g_free (line_buf);
+      length += 1;
+
+      g_ptr_array_add (lines_array, line);
+      total_bytes += length;
+
+      if (hint > 0 && total_bytes >= hint)
+        break;
+    }
+
+  PyObject *py_lines = PyList_New (lines_array->len);
+  if (!py_lines)
+    {
+      g_ptr_array_free (lines_array, TRUE);
+      return NULL;
+    }
+
+  for (guint i = 0; i < lines_array->len; i++)
+    {
+      gchar *line = g_ptr_array_index (lines_array, i);
+      PyObject *py_line = PyBytes_FromStringAndSize (line, strlen (line));
+      if (!py_line)
+        {
+          Py_DECREF (py_lines);
+          g_ptr_array_free (lines_array, TRUE);
+          return NULL;
+        }
+      PyList_SET_ITEM (py_lines, i, py_line);
+    }
+
+  g_ptr_array_free (lines_array, TRUE);
+  return py_lines;
 }
 
 static gboolean
@@ -1012,6 +1106,9 @@ StreamWrapper_exit_impl (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
 static PyObject *
 StreamWrapper_iter (StreamWrapper *self, PyObject *Py_UNUSED (ignored))
 {
+  if (is_closed (self))
+    return err_closed ();
+
   Py_INCREF (self);
   return (PyObject *)self;
 }
@@ -1090,6 +1187,8 @@ static PyMethodDef StreamWrapper_methods[]
           StreamWrapper_readinto_doc },
         { "readline", (PyCFunction)StreamWrapper_readline_impl, METH_VARARGS,
           StreamWrapper_readline_doc },
+        { "readlines", (PyCFunction)StreamWrapper_readlines_impl,
+          METH_VARARGS | METH_KEYWORDS, StreamWrapper_readlines_doc },
         { "writable", (PyCFunction)StreamWrapper_writable_impl, METH_NOARGS,
           StreamWrapper_writable_doc },
         { "write", (PyCFunction)StreamWrapper_write_impl, METH_VARARGS,
