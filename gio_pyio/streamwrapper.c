@@ -237,82 +237,66 @@ StreamWrapper_readable_impl (StreamWrapper *self,
 static PyObject *
 read_until_eof (StreamWrapper *self)
 {
-  gssize bufsize;
-  if (G_IS_BUFFERED_INPUT_STREAM (self->input))
-    bufsize = g_buffered_input_stream_get_buffer_size (
-        G_BUFFERED_INPUT_STREAM (self->input));
-  else
-    bufsize = DEFAULT_BUF_SIZE;
+  gssize bufsize = G_IS_BUFFERED_INPUT_STREAM (self->input)
+                       ? g_buffered_input_stream_get_buffer_size (
+                             G_BUFFERED_INPUT_STREAM (self->input))
+                       : DEFAULT_BUF_SIZE;
 
-  GPtrArray *chunks = g_ptr_array_new_with_free_func (g_free);
-  if (!chunks)
-    {
-      PyErr_NoMemory ();
-      return NULL;
-    }
+  Py_ssize_t capacity = bufsize > 0 ? bufsize : DEFAULT_BUF_SIZE;
+  PyObject *bytearray = PyByteArray_FromStringAndSize (NULL, capacity);
+  if (!bytearray)
+    return NULL;
 
-  GError *error = NULL;
+  char *dest = PyByteArray_AS_STRING (bytearray);
   Py_ssize_t total_size = 0;
+  GError *error = NULL;
 
   while (TRUE)
     {
-      char *buffer = g_malloc (bufsize);
-      if (!buffer)
+      if (total_size == capacity)
         {
-          PyErr_NoMemory ();
-          g_ptr_array_free (chunks, TRUE);
-          return NULL;
+          Py_ssize_t new_capacity = capacity * 2;
+          if (PyByteArray_Resize (bytearray, new_capacity) < 0)
+            {
+              Py_DECREF (bytearray);
+              return NULL; // error already set
+            }
+          dest = PyByteArray_AS_STRING (bytearray);
+          capacity = new_capacity;
         }
 
+      gssize to_read = capacity - total_size;
       gssize n
-          = g_input_stream_read (self->input, buffer, bufsize, NULL, &error);
+          = g_input_stream_read (G_INPUT_STREAM (self->data_input),
+                                 dest + total_size, to_read, NULL, &error);
       if (n < 0)
         {
           PyErr_SetString (PyExc_IOError,
                            error ? error->message : "Read error");
           g_clear_error (&error);
-          g_free (buffer);
-          g_ptr_array_free (chunks, TRUE);
+          Py_DECREF (bytearray);
           return NULL;
         }
       if (n == 0)
-        { // EOF
-          g_free (buffer);
-          break;
-        }
+        break; // EOF
 
-      if (n < bufsize)
-        {
-          // Resize buffer to actual size read
-          char *shrunk = g_realloc (buffer, n);
-          if (shrunk)
-            buffer = shrunk; // ignore realloc failure, buffer still valid
-        }
-
-      g_ptr_array_add (chunks, buffer);
       total_size += n;
     }
 
-  PyObject *result = PyBytes_FromStringAndSize (NULL, total_size);
-  if (!result)
+  // Resize down to exact total size
+  if (total_size != capacity)
     {
-      g_ptr_array_free (chunks, TRUE);
-      return NULL;
+      if (PyByteArray_Resize (bytearray, total_size) < 0)
+        {
+          Py_DECREF (bytearray);
+          return NULL;
+        }
     }
 
-  // Copy chunks into the result
-  char *dest = PyBytes_AS_STRING (result);
-  Py_ssize_t offset = 0;
-  for (guint i = 0; i < chunks->len; i++)
-    {
-      char *chunk = g_ptr_array_index (chunks, i);
-      gssize chunk_size
-          = (i == chunks->len - 1) ? total_size - offset : bufsize;
-      memcpy (dest + offset, chunk, chunk_size);
-      offset += chunk_size;
-    }
-
-  g_ptr_array_free (chunks, TRUE);
+  // Convert to immutable bytes object
+  PyObject *result = PyBytes_FromStringAndSize (
+      PyByteArray_AS_STRING (bytearray), total_size);
+  Py_DECREF (bytearray);
   return result;
 }
 
@@ -349,33 +333,68 @@ StreamWrapper_read_impl (StreamWrapper *self, PyObject *args, PyObject *kwds)
     return err_not_readable ();
 
   if (size == 0)
-    // Return empty bytes
     return PyBytes_FromStringAndSize ("", 0);
 
-  if (!(size > 0))
+  if (size < 0)
     return read_until_eof (self);
 
-  // Allocate buffer for fixed-size read
-  char *buffer = g_malloc (size);
-  if (buffer == NULL)
+  // Allocate initial bytearray with size or DEFAULT_BUF_SIZE, whichever is
+  // larger
+  Py_ssize_t capacity = size > DEFAULT_BUF_SIZE ? size : DEFAULT_BUF_SIZE;
+  PyObject *bytearray = PyByteArray_FromStringAndSize (NULL, capacity);
+  if (!bytearray)
+    return NULL;
+
+  char *buffer = PyByteArray_AS_STRING (bytearray);
+  Py_ssize_t total_read = 0;
+
+  while (total_read < size)
     {
-      PyErr_NoMemory ();
-      return NULL;
+      if (total_read == capacity)
+        {
+          Py_ssize_t new_capacity = capacity * 2;
+          if (PyByteArray_Resize (bytearray, new_capacity) < 0)
+            {
+              Py_DECREF (bytearray);
+              return NULL;
+            }
+          buffer = PyByteArray_AS_STRING (bytearray);
+          capacity = new_capacity;
+        }
+
+      gssize to_read = capacity - total_read;
+      if (to_read > (size - total_read))
+        to_read = size - total_read;
+
+      gssize n
+          = g_input_stream_read (G_INPUT_STREAM (self->data_input),
+                                 buffer + total_read, to_read, NULL, NULL);
+      if (n < 0)
+        {
+          PyErr_SetString (PyExc_IOError, "Read error");
+          Py_DECREF (bytearray);
+          return NULL;
+        }
+      if (n == 0) // EOF
+        break;
+
+      total_read += n;
     }
 
-  GError *error = NULL;
-  gssize n;
-  if (!g_input_stream_read_all (self->input, buffer, (gssize)size, &n, NULL,
-                                &error))
+  // Resize down to total_read
+  if (total_read != capacity)
     {
-      g_free (buffer);
-      PyErr_SetString (PyExc_IOError, error ? error->message : "Read error");
-      g_clear_error (&error);
-      return NULL;
+      if (PyByteArray_Resize (bytearray, total_read) < 0)
+        {
+          Py_DECREF (bytearray);
+          return NULL;
+        }
     }
 
-  PyObject *result = PyBytes_FromStringAndSize (buffer, n);
-  g_free (buffer);
+  // Convert to immutable bytes object
+  PyObject *result = PyBytes_FromStringAndSize (
+      PyByteArray_AS_STRING (bytearray), total_read);
+  Py_DECREF (bytearray);
   return result;
 }
 

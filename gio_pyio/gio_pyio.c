@@ -8,7 +8,7 @@ PyObject *PyGObjectClass = NULL;
 
 static struct PyModuleDef _gio_pyio_module
     = { PyModuleDef_HEAD_INIT,
-        "gio_pyio",
+        "_gio_pyio",
         "Module wrapping GIO streams as Python file objects",
         -1,
         NULL,
