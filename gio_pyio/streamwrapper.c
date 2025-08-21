@@ -237,67 +237,71 @@ StreamWrapper_readable_impl (StreamWrapper *self,
 static PyObject *
 read_until_eof (StreamWrapper *self)
 {
-  gssize bufsize = G_IS_BUFFERED_INPUT_STREAM (self->input)
-                       ? g_buffered_input_stream_get_buffer_size (
-                             G_BUFFERED_INPUT_STREAM (self->input))
-                       : DEFAULT_BUF_SIZE;
-
-  Py_ssize_t capacity = bufsize > 0 ? bufsize : DEFAULT_BUF_SIZE;
-  PyObject *bytearray = PyByteArray_FromStringAndSize (NULL, capacity);
-  if (!bytearray)
-    return NULL;
-
-  char *dest = PyByteArray_AS_STRING (bytearray);
-  Py_ssize_t total_size = 0;
   GError *error = NULL;
 
-  while (TRUE)
+  /* get current and end position */
+  goffset pos = g_seekable_tell (G_SEEKABLE (self->data_input));
+  if (!g_seekable_seek (G_SEEKABLE (self->data_input), 0, G_SEEK_END, NULL,
+                        &error))
     {
-      if (total_size == capacity)
-        {
-          Py_ssize_t new_capacity = capacity * 2;
-          if (PyByteArray_Resize (bytearray, new_capacity) < 0)
-            {
-              Py_DECREF (bytearray);
-              return NULL; // error already set
-            }
-          dest = PyByteArray_AS_STRING (bytearray);
-          capacity = new_capacity;
-        }
+      PyErr_SetString (PyExc_IOError, error ? error->message : "Seek error");
+      g_clear_error (&error);
+      return NULL;
+    }
 
-      gssize to_read = capacity - total_size;
+  goffset end = g_seekable_tell (G_SEEKABLE (self->data_input));
+  goffset size = end - pos;
+
+  if (!g_seekable_seek (G_SEEKABLE (self->data_input), pos, G_SEEK_SET, NULL,
+                        &error))
+    {
+      PyErr_SetString (PyExc_IOError, error ? error->message : "Seek error");
+      g_clear_error (&error);
+      return NULL;
+    }
+
+  if (size == 0)
+    return PyBytes_FromStringAndSize ("", 0);
+
+  if (size > PY_SSIZE_T_MAX)
+    {
+      PyErr_SetString (PyExc_OverflowError, "Stream too large");
+      return NULL;
+    }
+
+  /* Allocate PyBytes of the *expected* size */
+  PyObject *result = PyBytes_FromStringAndSize (NULL, (Py_ssize_t)size);
+  if (!result)
+    return NULL;
+
+  char *dest = PyBytes_AS_STRING (result);
+  Py_ssize_t total = 0;
+
+  while (total < size)
+    {
       gssize n
           = g_input_stream_read (G_INPUT_STREAM (self->data_input),
-                                 dest + total_size, to_read, NULL, &error);
+                                 dest + total, size - total, NULL, &error);
       if (n < 0)
         {
           PyErr_SetString (PyExc_IOError,
                            error ? error->message : "Read error");
           g_clear_error (&error);
-          Py_DECREF (bytearray);
+          Py_DECREF (result);
           return NULL;
         }
       if (n == 0)
-        break; // EOF
-
-      total_size += n;
+        break; /* EOF before expected */
+      total += n;
     }
 
-  // Resize down to exact total size
-  if (total_size != capacity)
-    {
-      if (PyByteArray_Resize (bytearray, total_size) < 0)
-        {
-          Py_DECREF (bytearray);
-          return NULL;
-        }
-    }
+  if (total == size)
+    return result;
 
-  // Convert to immutable bytes object
-  PyObject *result = PyBytes_FromStringAndSize (
-      PyByteArray_AS_STRING (bytearray), total_size);
-  Py_DECREF (bytearray);
-  return result;
+  /* EOF before expected */
+  PyObject *trimmed = PyBytes_FromStringAndSize (dest, total);
+  Py_DECREF (result);
+  return trimmed;
 }
 
 PyDoc_STRVAR (
@@ -452,13 +456,14 @@ StreamWrapper_readinto_impl (StreamWrapper *self, PyObject *args)
 
   Py_buffer view;
   if (PyObject_GetBuffer (buffer_obj, &view, PyBUF_WRITABLE) == -1)
-    // Not writable buffer
-    return NULL;
+    return NULL; // not writable
 
   GError *error = NULL;
-  gssize n_read;
-  if (!g_input_stream_read_all (self->input, (void *)view.buf, (gsize)view.len,
-                                &n_read, NULL, &error))
+  gssize n_read
+      = g_input_stream_read (G_INPUT_STREAM (self->data_input),
+                             (void *)view.buf, (gsize)view.len, NULL, &error);
+
+  if (n_read < 0)
     {
       PyBuffer_Release (&view);
       PyErr_SetString (PyExc_IOError, error ? error->message : "Read error");
@@ -862,9 +867,7 @@ is_seekable (StreamWrapper *self)
   gboolean unseekable = TRUE;
 
   if (self->input)
-    unseekable = unseekable
-                 && !(G_IS_SEEKABLE (self->input)
-                      && g_seekable_can_seek (G_SEEKABLE (self->input)));
+    unseekable = FALSE;
   if (self->output)
     unseekable = unseekable
                  && !(G_IS_SEEKABLE (self->output)
@@ -908,7 +911,7 @@ tell (StreamWrapper *self)
 {
   goffset pos;
   if (self->input)
-    pos = g_seekable_tell (G_SEEKABLE (self->input));
+    pos = g_seekable_tell (G_SEEKABLE (self->data_input));
   if (self->output)
     pos = g_seekable_tell (G_SEEKABLE (self->output));
   return pos;
@@ -996,8 +999,8 @@ StreamWrapper_seek_impl (StreamWrapper *self, PyObject *args, PyObject *kwargs)
 
   if (is_readable (self))
     {
-      if (!g_seekable_seek (G_SEEKABLE (self->input), offset, seek_type, NULL,
-                            &error))
+      if (!g_seekable_seek (G_SEEKABLE (self->data_input), offset, seek_type,
+                            NULL, &error))
         {
           PyErr_SetString (PyExc_IOError, error->message);
           g_error_free (error);

@@ -270,7 +270,7 @@ class GioPyIO(unittest.TestCase):
         # ("h", "a", "m", "\n"), so 4096 lines of that should get us
         # exactly on the buffer boundary for any power-of-2 buffersize
         # between 4 and 16384 (inclusive).
-        f = gio_pyio.open(self.file, 'rb', native=False)
+        f = gio_pyio.open(self.file, 'rb', buffering=0, native=False)
         for _i in range(nchunks):
             next(f)
         testline = testlines.pop(0)
